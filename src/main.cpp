@@ -12,8 +12,10 @@
 
 #include <TinyGPS++.h>
 #include <ICM42688.h>
+#include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
-#include <Servo.h>
+#include <Adafruit_MS8607.h>
+#include <SparkFun_u-blox_GNSS_v3.h>
 
 #include "SdFat.h"
 #include "RadioLib.h"
@@ -41,6 +43,8 @@ bool enable_buzzer = true;
 // i2c
 TwoWire i2c3(PIN_SDA, PIN_SCL);
 Adafruit_BME280 bme1;
+Adafruit_MS8607 ms;
+SFE_UBLOX_GNSS m10s;
 
 // UARTS
 HardwareSerial gnssSerial(PIN_RX, PIN_TX);
@@ -78,11 +82,11 @@ SPISettings lora_spi_settings(6'000'000, MSBFIRST, SPI_MODE0);
 constexpr struct
 {
   float center_freq = nova::config::frequency; // MHz
-  float bandwidth = 125.f;         // kHz
-  uint8_t spreading_factor = 9;    // SF: 6 to 12
-  uint8_t coding_rate = 7;         // CR: 5 to 8
-  uint8_t sync_word = 0x12;        // Private SX1262
-  int8_t power = 22;               // up to 22 dBm for SX1262
+  float bandwidth = 125.f;                     // kHz
+  uint8_t spreading_factor = 9;                // SF: 6 to 12
+  uint8_t coding_rate = 7;                     // CR: 5 to 8
+  uint8_t sync_word = 0x12;                    // Private SX1262
+  int8_t power = 22;                           // up to 22 dBm for SX1262
   uint16_t preamble_length = 8;
 } params;
 
@@ -129,7 +133,8 @@ int pos_b = nova::config::SERVO_B_LOCK;
 struct Data
 {
   // 40 bits
-  uint32_t timestamp;
+  uint32_t timestamp{};
+  uint32_t timestamp_us{};
   uint8_t counter;
 
   nova::state_t ps;
@@ -141,10 +146,23 @@ struct Data
   double gps_longitude;
   float gps_altitude;
 
+  // 160 bits
+  uint8_t gps_siv{};
+  double gps_latitude1;
+  double gps_longitude1;
+  float gps_altitude1;
+
   // 96 bits
   float altitude;
   float temp;
   float press;
+  float humid;
+
+  // 96 bits
+  float altitude1;
+  float temp1;
+  float press1;
+  float humid1;
 
   // 384 bits
   struct
@@ -172,6 +190,8 @@ struct peripherals_t
       uint8_t icm;
       uint8_t bme;
       uint8_t sd;
+      uint8_t m10s;
+      uint8_t ms;
     };
   };
 
@@ -253,11 +273,13 @@ volatile bool wake_flag = false;
 
 extern void buzzer_control(on_off_timer::interval_params *intervals_ms);
 
-extern void read_m10q();
-
 extern void read_gnss();
 
+extern void read_m10s();
+
 extern void read_bme(bme_ref_t *bme);
+
+extern void read_ms();
 
 extern void read_icm();
 
@@ -357,9 +379,28 @@ void setup()
   // lc86g UARTS
   gnssSerial.begin(115200);
 
-  // bme280(0x76)
+  // m10s (0x42)
+  pvalid.m10s = m10s.begin(i2c3);
+  if (pvalid.m10s)
+  {
+    // Basic configuration
+    m10s.setI2COutput(COM_TYPE_UBX, VAL_LAYER_RAM_BBR, nova::config::UBLOX_CUSTOM_MAX_WAIT);
+    m10s.setNavigationFrequency(25, VAL_LAYER_RAM_BBR, nova::config::UBLOX_CUSTOM_MAX_WAIT);
+    m10s.setAutoPVT(true, VAL_LAYER_RAM_BBR, nova::config::UBLOX_CUSTOM_MAX_WAIT);
+    m10s.setDynamicModel(DYN_MODEL_AIRBORNE4g, VAL_LAYER_RAM_BBR, nova::config::UBLOX_CUSTOM_MAX_WAIT);
+  }
+
+  // ms8607
   float gnd = 0.f;
 
+  pvalid.ms = ms.begin();
+  if (pvalid.ms)
+  {
+    Serial.println("MS8607");
+    ms.setPressureResolution(MS8607_PRESSURE_RESOLUTION_OSR_4096);
+  }
+
+  // bme280(0x76)
   pvalid.bme = bme1.begin(0x76, &i2c3);
   if (pvalid.bme)
   {
@@ -445,9 +486,11 @@ void setup()
 
              << (task_type(read_icm, 25ul, millis, 1), pvalid.icm)
              << (task_type(read_bme, &bme_ref, 50ul, millis, 1), pvalid.bme)
+             << (task_type(read_ms, 50ul, millis, 1), pvalid.ms)
              << task_type(synchronize_kf, 25ul, millis, 1)
 
              << task_type(read_gnss, 100ul, millis, 2)
+             << task_type(read_m10s, 100ul, millis, 2)
              << task_type(read_current, 500ul, millis, 3)
 
              << task_type(transmit_receive_data, 10ul, millis, 252)
@@ -493,7 +536,6 @@ void read_gnss()
   while (gnssSerial.available())
   {
     lc86.encode(gnssSerial.read());
-    data.timestamp = lc86.time.value();
   }
 
   if (lc86.location.isUpdated())
@@ -501,6 +543,34 @@ void read_gnss()
     data.gps_latitude = lc86.location.lat();
     data.gps_longitude = lc86.location.lng();
     data.gps_altitude = lc86.altitude.meters();
+  }
+}
+
+void read_gnss()
+{
+
+  while (gnssSerial.available())
+  {
+    lc86.encode(gnssSerial.read());
+  }
+
+  if (lc86.location.isUpdated())
+  {
+    data.gps_latitude = lc86.location.lat();
+    data.gps_longitude = lc86.location.lng();
+    data.gps_altitude = lc86.altitude.meters();
+  }
+}
+
+void read_m10s()
+{
+  if (m10s.getPVT(nova::config::UBLOX_CUSTOM_MAX_WAIT))
+  {
+    data.timestamp = m10s.getUnixEpoch(data.timestamp_us, nova::config::UBLOX_CUSTOM_MAX_WAIT);
+    data.gps_siv = m10s.getSIV(nova::config::UBLOX_CUSTOM_MAX_WAIT);
+    data.gps_latitude1 = static_cast<double>(m10s.getLatitude(nova::config::UBLOX_CUSTOM_MAX_WAIT)) * 1.e-7;
+    data.gps_longitude1 = static_cast<double>(m10s.getLongitude(nova::config::UBLOX_CUSTOM_MAX_WAIT)) * 1.e-7;
+    data.gps_altitude1 = static_cast<float>(m10s.getAltitudeMSL(nova::config::UBLOX_CUSTOM_MAX_WAIT)) * 1.e-3f;
   }
 }
 
@@ -521,8 +591,20 @@ void read_bme(bme_ref_t *bme)
   }
 
   bme->alt = pressure_altitude(data.press);
+  data.humid = bme1.readHumidity();
 
   t_prev = millis();
+}
+
+void read_ms()
+{
+  sensors_event_t temp, pressure, humidity;
+  ms.getEvent(&pressure, &temp, &humidity);
+
+  data.temp1 = temp.temperature;
+  data.press1 = pressure.pressure;
+  data.altitude1 = pressure_altitude(data.press1);
+  data.humid1 = humidity.relative_humidity;
 }
 
 void read_icm()
@@ -589,7 +671,7 @@ void retain_deployment()
   else if (angle == nova::config::SERVO_A_DEPLOY)
   {
     servo_a.write(angle);
-  } 
+  }
   else
   {
     servo_a.write(pos_a);
@@ -606,16 +688,19 @@ void construct_data()
       << data.timestamp
 
       << nova::state_string(data.ps)
-      << String(data.gps_latitude, 6)
-      << String(data.gps_longitude, 6)
-      << String(data.altitude, 4)
-      << String(ground_truth.apogee, 4)
-
+      << String(data.gps_latitude1, 6)
+      << String(data.gps_longitude1, 6)
+      << String(data.altitude1, 4)
+      
       << nova::pyro_state_string(data.pyro_a)
-      << nova::pyro_state_string(data.pyro_b)
 
       << data.temp
       << data.press
+      << data.humid
+
+      << data.temp1
+      << data.press1
+      << data.humid1
 
       << data.imu.acc.x << data.imu.acc.y << data.imu.acc.z
       << data.imu.gyro.x << data.imu.gyro.y << data.imu.gyro.z
@@ -630,22 +715,15 @@ void construct_data()
   tx_data = "";
   csv_stream_crlf(tx_data)
       << nova::config::DEVICE_NO // DEVICE NO
-      << "NOVA"
-      << params.center_freq
+      << "N"
       << data.counter
 
-      << nova::state_string(data.ps)
-      << String(data.gps_latitude, 6)
-      << String(data.gps_longitude, 6)
-      << String(data.altitude, 4)
-      << String(ground_truth.apogee, 4)
-
-      << data.servoCheck
-      << data.currentServo
-      << data.voltageMon
-
-      << data.last_ack
-      << data.last_nack;
+      << data.timestamp
+      << String(data.gps_latitude1, 6)
+      << String(data.gps_longitude1, 6)
+      << String(data.altitude1, 4)
+      << String(data.gps_altitude1);
+      
 }
 
 template <typename SdType, typename FileType>
