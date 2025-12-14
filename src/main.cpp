@@ -852,7 +852,7 @@ void fsm_eval() {
   int32_t static launched_time   = 0;
   static algorithm::Sampler sampler[2];
 
-  const double alt_x = data.altitude - ground_truth.altitude_offset;
+  const double alt_x = data.altitude1 - ground_truth.altitude_offset;
   const double vel_x = filters.altitude.kf.state_vector[1];
   const double acc   = filters.acceleration.kf.state_vector[2];
 
