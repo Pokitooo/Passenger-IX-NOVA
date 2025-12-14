@@ -9,14 +9,11 @@ namespace nova {
         IDLE_SAFE,
         ARMED,
         PAD_PREOP,
-        POWERED,
-        COASTING,
-        DROGUE_DEPLOY,
-        DROGUE_DESCEND,
-        MAIN_DEPLOY,
-        MAIN_DESCEND,
-        LANDED,
-        RECOVERED_SAFE
+        ASCENT,
+        APOGEE,
+        DEPLOY,
+        DESCENT,
+        LANDED
     };
 
     inline const char *state_string(const state_t state) {
@@ -29,22 +26,15 @@ namespace nova {
                 return "ARMED";
             case state_t::PAD_PREOP:
                 return "PAD_PREOP";
-            case state_t::POWERED:
-                return "POWERED";
-            case state_t::COASTING:
-                return "COASTING";
-            case state_t::DROGUE_DEPLOY:
-                return "DROG_DEPL";
-            case state_t::DROGUE_DESCEND:
-                return "DROG_DESC";
-            case state_t::MAIN_DEPLOY:
-                return "MAIN_DEPL";
-            case state_t::MAIN_DESCEND:
+            case state_t::ASCENT:
+                return "ASCENT";
+            case state_t::APOGEE:
+                return "APOGEE";
+            case state_t::DEPLOY:
+                return "DEPLOY";
                 return "MAIN_DESC";
             case state_t::LANDED:
                 return "LANDED";
-            case state_t::RECOVERED_SAFE:
-                return "REC_SAFE";
             default:
                 __builtin_unreachable();
         }
