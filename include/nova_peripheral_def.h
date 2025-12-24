@@ -54,21 +54,19 @@ namespace nova::config
   /*
    */
 
-  constexpr uint32_t TIME_TO_BURNOUT_MIN = 1.35 * 1000ul;
-  constexpr uint32_t TIME_TO_BURNOUT_MAX = 2.35 * 1000ul;                               // Sim + 0.5
-  constexpr uint32_t TIME_TO_APOGEE_MIN = (nova::config::OPTIMUM_DELAY - 1) * 1000ul;   // Sim -1
-  constexpr uint32_t TIME_TO_APOGEE_MAX = (nova::config::OPTIMUM_DELAY + 0.5) * 1000ul; // Sim +0.5
+  constexpr uint32_t TIME_TO_APOGEE_MIN = 30 * 60 * 1000ul;
+  constexpr uint32_t TIME_TO_APOGEE_MAX = 40 * 60 * 1000ul;                               // Sim + 0.5
   constexpr uint32_t TIME_TO_MAIN_MIN = 10 * 1000ul;                                    // Sim - 10
   constexpr uint32_t TIME_TO_MAIN_MAX = 30 * 1000ul;                                    // Sim + 2
 
   namespace alg
   {
-    constexpr uint32_t LAUNCH_TON = 150ul;          // 150 ms
-    constexpr uint32_t BURNOUT_TON = 500ul;         // 500 ms
+    constexpr uint32_t LAUNCH_TON = 50ul;          // 150 ms
+    constexpr uint32_t BURNOUT_TON = 30 * 1000ul;         // 500 ms
     constexpr uint32_t APOGEE_SLOW_TON = 1000ul;    // 2000 ms
     constexpr uint32_t MAIN_DEPLOYMENT_TON = 200ul; // 200 ms
     constexpr uint32_t LANDING_TON = 5000ul;        // 200 ms
-    constexpr double APOGEE = 30.f * 1000.f;        // 62.7 m/s^2
+    constexpr double APOGEE = 20.f * 1000.f;        // 20 km 
     constexpr double APOGEE_VEL = 10.0;             // m/s
     constexpr double MAIN_ALTITUDE = 100.f;         // m
   } // namespace alg
@@ -114,7 +112,7 @@ namespace nova::config
   namespace details::assertions
   {
     static_assert(TIME_TO_APOGEE_MAX >= TIME_TO_APOGEE_MIN, "Time to apogee is configured incorrectly!");
-    static_assert(TIME_TO_BURNOUT_MAX >= TIME_TO_BURNOUT_MIN, "Time to burnout is configured incorrectly!");
+    static_assert(TIME_TO_MAIN_MAX >= TIME_TO_MAIN_MIN, "Time to burnout is configured incorrectly!");
   } // namespace details::assertions
 } // namespace luna::config
 

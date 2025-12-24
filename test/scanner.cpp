@@ -10,10 +10,6 @@ void setup() {
 }
 
 void loop() {
-    Serial.println("Hello");
-    digitalToggle(PB5);
-    digitalToggle(PA0);
-
     i2c_detect(Serial, i2c3, 0x00, 127);
     delay(1000);
 }

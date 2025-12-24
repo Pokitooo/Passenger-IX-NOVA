@@ -175,6 +175,9 @@ struct Data {
 
 } data;
 
+double alt_x;
+uint32_t START_TO_FLOAT_ALT;
+
 struct peripherals_t {
   union {
     struct
@@ -304,8 +307,8 @@ void setup() {
   spi1.begin();
 
   // GPIO
-  dout_low << ledPin
-           << buzzerPin;
+  dout_low << ledPin;
+  //  << buzzerPin;
 
   gpio_write << io_function::pull_high(buzzerPin);
   delay(100);
@@ -364,6 +367,7 @@ void setup() {
   pvalid.m10s = m10s.begin(i2c3, 0x42);
   if (pvalid.m10s) {
     // Basic configuration
+    Serial.println("m10s success");
     m10s.setI2COutput(COM_TYPE_UBX, VAL_LAYER_RAM_BBR, nova::config::UBLOX_CUSTOM_MAX_WAIT);
     m10s.setNavigationFrequency(25, VAL_LAYER_RAM_BBR, nova::config::UBLOX_CUSTOM_MAX_WAIT);
     m10s.setAutoPVT(true, VAL_LAYER_RAM_BBR, nova::config::UBLOX_CUSTOM_MAX_WAIT);
@@ -375,20 +379,23 @@ void setup() {
 
   pvalid.ms = ms.begin(&i2c3);
   if (pvalid.ms) {
-    Serial.println("MS8607");
+    Serial.println("MS8607 success");
     ms.setPressureResolution(MS8607_PRESSURE_RESOLUTION_OSR_4096);
+    for (size_t i = 0; i < 20; ++i) {
+      read_ms();
+    }
+    gnd += data.altitude1;
   }
 
   // bme280(0x76)
   pvalid.bme = bme1.begin(0x76, &i2c3);
   if (pvalid.bme) {
     bme1.SAMPLING_X16;
-    for (size_t i = 0; i < 20; ++i) {
-      read_bme(&bme_ref);
-    }
-    gnd += data.altitude;
   }
+
   ground_truth.altitude_offset = gnd;
+  START_TO_FLOAT_ALT = ground_truth.altitude_offset + 20;
+  Serial.println(ground_truth.altitude_offset);
 
   // ADC
   analogReadResolution(ADC_BITS);
@@ -485,19 +492,6 @@ void buzzer_control(on_off_timer::interval_params *intervals_ms) {
     digitalToggle(to_digital(ledPin));
     digitalToggle(to_digital(buzzerPin));
     delay(intervals_ms->t_on + intervals_ms->t_off);
-  }
-}
-
-void read_gnss() {
-
-  while (gnssSerial.available()) {
-    lc86.encode(gnssSerial.read());
-  }
-
-  if (lc86.location.isUpdated()) {
-    data.gps_latitude  = lc86.location.lat();
-    data.gps_longitude = lc86.location.lng();
-    data.gps_altitude  = lc86.altitude.meters();
   }
 }
 
@@ -629,10 +623,9 @@ void construct_data() {
     << data.imu.acc.x << data.imu.acc.y << data.imu.acc.z
     << data.imu.gyro.x << data.imu.gyro.y << data.imu.gyro.z
 
-    << data.currentServo
-    << data.servoCheck
-    << data.voltageMon
-
+    << ground_truth.altitude_offset
+    << alt_x
+    << ground_truth.apogee
     << data.last_ack
     << data.last_nack;
 
@@ -762,34 +755,34 @@ void handle_command(String rx_message) {
   } else if (command == "shutup") {
     PINS_OFF();
   } else if (command == "servo-a-set") {
-    if (data.ps != nova::state_t::IDLE_SAFE ) {
+    if (data.ps != nova::state_t::IDLE_SAFE) {
       pos_a = nova::config::SERVO_A_SET;
     }
   } else if (command == "servo-a-lock") {
-    if (data.ps != nova::state_t::IDLE_SAFE ) {
+    if (data.ps != nova::state_t::IDLE_SAFE) {
       pos_a = nova::config::SERVO_A_LOCK;
     }
   } else if (command == "servo-a-deploy") {
-    if (data.ps != nova::state_t::IDLE_SAFE ) {
+    if (data.ps != nova::state_t::IDLE_SAFE) {
       pos_a       = nova::config::SERVO_A_DEPLOY;
       data.pyro_a = nova::pyro_state_t::FIRING;
     }
   } else if (command == "servo-b-set") {
-    if (data.ps != nova::state_t::IDLE_SAFE ) {
+    if (data.ps != nova::state_t::IDLE_SAFE) {
       pos_b = nova::config::SERVO_A_SET;
     }
   } else if (command == "servo-b-lock") {
-    if (data.ps != nova::state_t::IDLE_SAFE ) {
+    if (data.ps != nova::state_t::IDLE_SAFE) {
       pos_b = nova::config::SERVO_B_LOCK;
     }
   } else if (command == "servo-b-deploy") {
-    if (data.ps != nova::state_t::IDLE_SAFE ) {
+    if (data.ps != nova::state_t::IDLE_SAFE) {
       pos_b       = nova::config::SERVO_B_DEPLOY;
       data.pyro_b = nova::pyro_state_t::FIRING;
     }
   } else if (command == "servo-a-test") {
     float current = 0.F;
-    if (data.ps != nova::state_t::IDLE_SAFE ) {
+    if (data.ps != nova::state_t::IDLE_SAFE) {
       servo_a.write(nova::config::SERVO_A_LOCK + 5);
       for (size_t i = 0; i < 20; ++i) {
         float dvServo     = analogRead(digitalPinToAnalogInput(VOUT_Servo)) / ADC_DIVIDER * VREF;
@@ -852,7 +845,7 @@ void fsm_eval() {
   int32_t static launched_time   = 0;
   static algorithm::Sampler sampler[2];
 
-  const double alt_x = data.altitude1 - ground_truth.altitude_offset;
+  alt_x              = data.altitude1 - ground_truth.altitude_offset;
   const double vel_x = filters.altitude.kf.state_vector[1];
   const double acc   = filters.acceleration.kf.state_vector[2];
 
@@ -871,11 +864,10 @@ void fsm_eval() {
       // <--- Next: wait for uplink --->
       buzzer_intervals.t_off = nova::config::BUZZER_OFF_INTERVAL(nova::config::BUZZER_ARMED_INTERVAL);
       data.ps                = nova::state_t::PAD_PREOP;
+      data.pyro_a            = nova::pyro_state_t::ARMED;
 
       if (launch_override) {
-        data.ps      = nova::state_t::PAD_PREOP;
-        tx_interval  = nova::config::TX_PAD_PREOP_INTERVAL;
-        log_interval = nova::config::LOG_PAD_PREOP_INTERVAL;
+        data.ps = nova::state_t::PAD_PREOP;
       }
       break;
     }
@@ -886,8 +878,8 @@ void fsm_eval() {
       static on_off_timer tim(nova::config::alg::LAUNCH_TON / 2, nova::config::alg::LAUNCH_TON / 2, millis);
 
       if (!state_satisfaction) {
-        sampler[0].add(alt_x >= ground_truth.altitude_offset + 100);
-        sampler[1].add(alt_x >= ground_truth.altitude_offset + 100);
+        sampler[0].add(alt_x >= START_TO_FLOAT_ALT);
+        sampler[1].add(alt_x >= START_TO_FLOAT_ALT);
 
         tim.on_rising([&] {
           if (sampler[0].vote<1, 1>()) {
@@ -924,18 +916,18 @@ void fsm_eval() {
 
         tim.on_rising([&] {
           if (sampler[0].vote<1, 1>()) {
-            state_satisfaction |= millis() - launched_time >= nova::config::TIME_TO_BURNOUT_MIN;
+            state_satisfaction |= millis() - launched_time >= nova::config::TIME_TO_APOGEE_MIN;
           }
           sampler[0].reset(); });
 
         tim.on_falling([&] {
           if (sampler[1].vote<1, 1>()) {
-            state_satisfaction |= millis() - launched_time >= nova::config::TIME_TO_BURNOUT_MIN;
+            state_satisfaction |= millis() - launched_time >= nova::config::TIME_TO_APOGEE_MIN;
           }
           sampler[1].reset(); });
       }
 
-      state_satisfaction |= millis() - launched_time >= nova::config::TIME_TO_BURNOUT_MAX;
+      state_satisfaction |= millis() - launched_time >= nova::config::TIME_TO_APOGEE_MAX;
 
       if (state_satisfaction) {
         data.ps            = nova::state_t::APOGEE;
@@ -949,7 +941,6 @@ void fsm_eval() {
     case nova::state_t::DEPLOY: {
       // Next: activate and always transfer
       static bool fired = false;
-      int         angle;
 
       if (!fired) {
         pos_a       = nova::config::SERVO_A_DEPLOY;
@@ -1012,68 +1003,7 @@ void fsm_eval() {
 }
 
 void print_data() {
-
-  Serial.println("====== DATA ======");
-
-  Serial.print("Timestamp: ");
-  Serial.println(data.timestamp);
-
-  Serial.print("Counter: ");
-  Serial.println(data.counter);
-
-  Serial.println("---- STATES ----");
-  Serial.print("PS: ");
-  Serial.println(nova::state_string(data.ps));
-  Serial.print("Pyro A: ");
-  Serial.println(nova::pyro_state_string(data.pyro_a));
-  Serial.print("Pyro B: ");
-  Serial.println(nova::pyro_state_string(data.pyro_b));
-
-  Serial.println("---- GPS ----");
-  Serial.print("Latitude: ");
-  Serial.println(data.gps_latitude, 6);
-  Serial.print("Longitude: ");
-  Serial.println(data.gps_longitude, 6);
-  Serial.print("Altitude: ");
-  Serial.println(data.gps_altitude, 4);
-
-  Serial.println("---- ENV ----");
-  Serial.print("Temperature: ");
-  Serial.println(data.temp, 2);
-  Serial.print("Altitude: ");
-  Serial.println(data.altitude, 2);
-  Serial.print("Pressure: ");
-  Serial.println(data.press, 2);
-
-  Serial.println("---- IMU ACC ----");
-  Serial.print("X: ");
-  Serial.print(data.imu.acc.x, 3);
-  Serial.print("  Y: ");
-  Serial.print(data.imu.acc.y, 3);
-  Serial.print("  Z: ");
-  Serial.println(data.imu.acc.z, 3);
-
-  Serial.println("---- IMU GYRO ----");
-  Serial.print("X: ");
-  Serial.print(data.imu.gyro.x, 3);
-  Serial.print("  Y: ");
-  Serial.print(data.imu.gyro.y, 3);
-  Serial.print("  Z: ");
-  Serial.println(data.imu.gyro.z, 3);
-
-  Serial.println("---- COMM ----");
-  Serial.print("Last ACK: ");
-  Serial.println(data.last_ack);
-  Serial.print("Last NACK: ");
-  Serial.println(data.last_nack);
-
-  Serial.print("currentServo = ");
-  Serial.println(data.currentServo, 2);  // print with 2 decimal places
-
-  Serial.print("voltageMon = ");
-  Serial.println(data.voltageMon, 2);
-
-  Serial.println("==================\n");
+  Serial.println(constructed_data);
 }
 
 void set_rxflag() {
